@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from .models import Location, Trip, RouteStop
 from .serializers import LocationSerializer, TripSerializer, RouteStopSerializer
 from .route_planning import calculate_route, generate_stops
+from logs.log_generator import generate_daily_logs_for_trip
+from logs.serializers import DailyLogSerializer
 
 class LocationViewSet(viewsets.ModelViewSet):
     queryset = Location.objects.all()
@@ -27,11 +29,14 @@ class TripViewSet(viewsets.ModelViewSet):
         
         # Generate stops based on HOS regulations
         stops = generate_stops(trip, route_data)
+        daily_logs = generate_daily_logs_for_trip(trip)
+        
         
         # Return route data and stops
         return Response({
             'route': route_data,
-            'stops': RouteStopSerializer(stops, many=True).data
+            'stops': RouteStopSerializer(stops, many=True).data,
+            'daily_logs':  DailyLogSerializer(daily_logs, many=True).data
         })
 
 class RouteStopViewSet(viewsets.ModelViewSet):
