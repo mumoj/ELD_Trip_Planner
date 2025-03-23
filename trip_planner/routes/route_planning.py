@@ -2,6 +2,7 @@ import requests
 import datetime
 from .models import RouteStop, Location
 from django.conf import settings
+from django.utils import timezone
 
 # HOS (Hours of Service) regulations
 MAX_DRIVING_HOURS = 11  # Maximum driving hours per day
@@ -35,6 +36,9 @@ def calculate_route(current_location, pickup_location, dropoff_location, current
     response = requests.get(current_to_pickup_url)
     current_to_pickup_data = response.json()
     
+    # Extract the detailed route geometry coordinates
+    current_to_pickup_coordinates = current_to_pickup_data['routes'][0]['geometry']['coordinates']
+    
     # Pickup to dropoff
     pickup_to_dropoff_url = f"{base_url}{pickup_location.longitude},{pickup_location.latitude};"
     pickup_to_dropoff_url += f"{dropoff_location.longitude},{dropoff_location.latitude}?overview=full&geometries=geojson"
@@ -42,6 +46,9 @@ def calculate_route(current_location, pickup_location, dropoff_location, current
     # Make API request
     response = requests.get(pickup_to_dropoff_url)
     pickup_to_dropoff_data = response.json()
+    
+    # Extract the detailed route geometry coordinates
+    pickup_to_dropoff_coordinates = pickup_to_dropoff_data['routes'][0]['geometry']['coordinates']
     
     # Calculate distance and time
     total_distance_meters = (
@@ -67,6 +74,10 @@ def calculate_route(current_location, pickup_location, dropoff_location, current
         'distance_miles': total_distance_miles,
         'duration_hours': total_duration_hours,
         'geometry': combined_geometry,
+        'coordinates': {
+            'current_to_pickup': current_to_pickup_coordinates,
+            'pickup_to_dropoff': pickup_to_dropoff_coordinates
+        },
         'current_to_pickup': {
             'distance_miles': current_to_pickup_data['routes'][0]['distance'] / 1609.34,
             'duration_hours': current_to_pickup_data['routes'][0]['duration'] / 3600
@@ -84,6 +95,7 @@ def generate_stops(trip, route_data):
     
     # Start with current time
     current_time = datetime.datetime.now()
+    current_time = timezone.make_aware(current_time)
     
     # Track driver hours
     driving_hours_today = 0
@@ -110,25 +122,34 @@ def generate_stops(trip, route_data):
     
     current_time += datetime.timedelta(minutes=15)  # 15 min preparation
     
-    # Current location to pickup
+    # SEGMENT 1: Current location to pickup
     distance_to_pickup = route_data['current_to_pickup']['distance_miles']
     duration_to_pickup = route_data['current_to_pickup']['duration_hours']
+    coordinates_section1 = route_data['coordinates']['current_to_pickup']
     
-    # Handle driving to pickup with potential breaks
-    current_time, driving_hours_today, on_duty_hours_today, cycle_hours_used, current_position, last_fuel_position = process_driving_segment(
-        trip, 
-        stops, 
-        trip.current_location, 
+    # Process segment iteratively instead of recursively
+    segment_result = process_segment_iteratively(
+        trip,
+        stops,
+        trip.current_location,
         trip.pickup_location,
-        current_time, 
-        distance_to_pickup, 
+        current_time,
+        distance_to_pickup,
         duration_to_pickup,
-        driving_hours_today, 
-        on_duty_hours_today, 
+        driving_hours_today,
+        on_duty_hours_today,
         cycle_hours_used,
         current_position,
-        last_fuel_position
+        last_fuel_position,
+        coordinates_section1
     )
+    
+    current_time = segment_result['current_time']
+    driving_hours_today = segment_result['driving_hours_today']
+    on_duty_hours_today = segment_result['on_duty_hours_today']
+    cycle_hours_used = segment_result['cycle_hours_used']
+    current_position = segment_result['current_position']
+    last_fuel_position = segment_result['last_fuel_position']
     
     # Add pickup stop
     pickup_stop = RouteStop(
@@ -164,25 +185,29 @@ def generate_stops(trip, route_data):
         driving_hours_today = 0
         on_duty_hours_today = 0
     
-    # Pickup to dropoff
+    # SEGMENT 2: Pickup to dropoff
     distance_to_dropoff = route_data['pickup_to_dropoff']['distance_miles']
     duration_to_dropoff = route_data['pickup_to_dropoff']['duration_hours']
+    coordinates_section2 = route_data['coordinates']['pickup_to_dropoff']
     
-    # Handle driving to dropoff with potential breaks
-    current_time, driving_hours_today, on_duty_hours_today, cycle_hours_used, current_position, last_fuel_position = process_driving_segment(
-        trip, 
-        stops, 
-        trip.pickup_location, 
+    # Process segment iteratively
+    segment_result = process_segment_iteratively(
+        trip,
+        stops,
+        trip.pickup_location,
         trip.dropoff_location,
-        current_time, 
-        distance_to_dropoff, 
+        current_time,
+        distance_to_dropoff,
         duration_to_dropoff,
-        driving_hours_today, 
-        on_duty_hours_today, 
+        driving_hours_today,
+        on_duty_hours_today,
         cycle_hours_used,
         current_position,
-        last_fuel_position
+        last_fuel_position,
+        coordinates_section2
     )
+    
+    current_time = segment_result['current_time']
     
     # Add dropoff stop
     dropoff_stop = RouteStop(
@@ -198,162 +223,191 @@ def generate_stops(trip, route_data):
     
     return stops
 
-def process_driving_segment(trip, stops, start_location, end_location, current_time, distance, duration, 
-                            driving_hours_today, on_duty_hours_today, cycle_hours_used, 
-                            current_position, last_fuel_position):
-    """Process a driving segment with potential breaks"""
-    # Calculate how many miles we can cover in the remaining driving time today
-    remaining_driving_hours = min(MAX_DRIVING_HOURS - driving_hours_today, MAX_ON_DUTY_HOURS - on_duty_hours_today)
+def process_segment_iteratively(trip, stops, start_location, end_location, 
+                               current_time, total_distance, total_duration, 
+                               driving_hours_today, on_duty_hours_today, cycle_hours_used, 
+                               current_position, last_fuel_position, coordinates):
+    """
+    Process a driving segment iteratively (not recursively) with potential breaks
+    """
+    # Initialize variables for tracking progress
+    distance_covered = 0
+    time_spent = 0
+    current_location = start_location
     
-    # If we have a break coming up soon, account for that
-    if driving_hours_today > 0 and driving_hours_today + duration > MAX_DRIVING_BEFORE_BREAK:
-        # We need a 30-minute break
-        break_point = MAX_DRIVING_BEFORE_BREAK - driving_hours_today
+    # Continue until segment is complete
+    while distance_covered < total_distance:
+        # Calculate remaining portions
+        remaining_distance = total_distance - distance_covered
+        remaining_duration = (remaining_distance / total_distance) * total_duration
         
-        # Calculate position at break point
-        break_miles = (break_point / duration) * distance
-        break_position = current_position + break_miles
-        
-        # Estimate break location
-        break_location, _ = get_location_at_position(start_location, end_location, break_position / distance)
-        
-        # Add break stop
-        break_stop = RouteStop(
-            trip=trip,
-            location=break_location,
-            arrival_time=current_time + datetime.timedelta(hours=break_point),
-            departure_time=current_time + datetime.timedelta(hours=break_point + 0.5),  # 30-minute break
-            stop_type='rest',
-            notes="Required 30-minute break"
-        )
-        break_stop.save()
-        stops.append(break_stop)
-        
-        # Update time and hours
-        current_time += datetime.timedelta(hours=break_point + 0.5)
-        driving_hours_today += break_point
-        on_duty_hours_today += break_point + 0.5
-        cycle_hours_used += break_point + 0.5
-        current_position = break_position
-        
-        # Recalculate remaining driving hours
+        # Check for driver hours limits
         remaining_driving_hours = min(MAX_DRIVING_HOURS - driving_hours_today, MAX_ON_DUTY_HOURS - on_duty_hours_today)
         
-        # Recalculate remaining distance and duration
-        remaining_distance = distance - break_miles
-        remaining_duration = duration - break_point
+        # Need a break?
         
-        # Process the rest of the segment
-        return process_driving_segment(
-            trip, stops, break_location, end_location,
-            current_time, remaining_distance, remaining_duration,
-            driving_hours_today, on_duty_hours_today, cycle_hours_used,
-            current_position, last_fuel_position
-        )
+        last_rest_stop = RouteStop.objects.filter(trip=trip, stop_type__in=["rest", "fuel"]).order_by('-pk').first()
+        last_rest_location = getattr(last_rest_stop, 'location', None)
+        if driving_hours_today > 0 and driving_hours_today + remaining_duration > MAX_DRIVING_BEFORE_BREAK and current_location != last_rest_location:
+            # Calculate when the break is needed
+            break_point = MAX_DRIVING_BEFORE_BREAK - driving_hours_today
+            break_distance = (break_point / remaining_duration) * remaining_distance
+            
+            # Find exact break location using coordinates
+            break_ratio = (distance_covered + break_distance) / total_distance
+            break_location = get_location_at_position(start_location, end_location, break_ratio, coordinates)
+            
+            # Update progress
+            distance_covered += break_distance
+            current_position += break_distance
+            time_spent += break_point
+            
+            # Add break stop
+            break_stop_time = current_time + datetime.timedelta(hours=break_point)
+            break_stop = RouteStop(
+                trip=trip,
+                location=break_location,
+                arrival_time=break_stop_time,
+                departure_time=break_stop_time + datetime.timedelta(hours=0.5),  # 30-minute break
+                stop_type='rest',
+                notes="Required 30-minute break"
+            )
+            break_stop.save()
+            stops.append(break_stop)
+            
+            
+            
+            # Update time and hours
+            current_time = break_stop_time + datetime.timedelta(hours=0.5)
+            driving_hours_today += break_point
+            on_duty_hours_today += break_point + 0.5
+            cycle_hours_used += break_point + 0.5
+            current_location = break_location
+            
+            continue
+        
+        # Need fueling?
+        if current_position - last_fuel_position >= FUELING_INTERVAL_MILES - 100:  # 100 mile buffer
+            # Add fuel after a bit more driving
+            fuel_miles = min(100, remaining_distance)  # Don't go past the destination
+            
+            # Find exact fuel location using coordinates
+            fuel_ratio = (distance_covered + fuel_miles) / total_distance
+            fuel_location = get_location_at_position(start_location, end_location, fuel_ratio, coordinates)
+            
+            # Calculate driving time to fuel location
+            fuel_driving_time = (fuel_miles / remaining_distance) * remaining_duration
+            
+            # Update progress
+            distance_covered += fuel_miles
+            current_position += fuel_miles
+            time_spent += fuel_driving_time
+            
+            # Add fuel stop
+            fuel_stop_time = current_time + datetime.timedelta(hours=fuel_driving_time)
+            fuel_stop = RouteStop(
+                trip=trip,
+                location=fuel_location,
+                arrival_time=fuel_stop_time,
+                departure_time=fuel_stop_time + datetime.timedelta(hours=0.75),  # 45 minutes for fueling
+                stop_type='fuel',
+                notes="Scheduled refueling"
+            )
+            fuel_stop.save()
+            stops.append(fuel_stop)
+            
+            # Update time and hours
+            current_time = fuel_stop_time + datetime.timedelta(hours=0.75)
+            driving_hours_today += fuel_driving_time
+            on_duty_hours_today += fuel_driving_time + 0.75
+            cycle_hours_used += fuel_driving_time + 0.75
+            current_location = fuel_location
+            last_fuel_position = current_position
+            
+            continue
+        
+        # Can we complete the segment within today's hours?
+        if remaining_duration > remaining_driving_hours:
+            # Calculate how far we can go today
+            drivable_hours = remaining_driving_hours
+            drivable_distance = (drivable_hours / remaining_duration) * remaining_distance
+            
+            # Find exact overnight location using coordinates
+            overnight_ratio = (distance_covered + drivable_distance) / total_distance
+            overnight_location = get_location_at_position(start_location, end_location, overnight_ratio, coordinates)
+            
+            # Update progress
+            distance_covered += drivable_distance
+            current_position += drivable_distance
+            time_spent += drivable_hours
+            
+            # Add overnight stop
+            overnight_arrival = current_time + datetime.timedelta(hours=drivable_hours)
+            overnight_stop = RouteStop(
+                trip=trip,
+                location=overnight_location,
+                arrival_time=overnight_arrival,
+                departure_time=overnight_arrival + datetime.timedelta(hours=REQUIRED_REST_HOURS),
+                stop_type='sleep',
+                notes="Required 10-hour rest period"
+            )
+            overnight_stop.save()
+            stops.append(overnight_stop)
+            
+            # Update time and reset hours for new day
+            current_time = overnight_arrival + datetime.timedelta(hours=REQUIRED_REST_HOURS)
+            driving_hours_today = 0  # Reset for new day
+            on_duty_hours_today = 0  # Reset for new day
+            cycle_hours_used += drivable_hours
+            current_location = overnight_location
+            
+            continue
+        
+        # We can complete the remainder of the segment
+        current_time += datetime.timedelta(hours=remaining_duration)
+        driving_hours_today += remaining_duration
+        on_duty_hours_today += remaining_duration
+        cycle_hours_used += remaining_duration
+        current_position += remaining_distance
+        
+        # We've completed the segment
+        distance_covered = total_distance
     
-    # Check if we need fueling
-    if current_position - last_fuel_position >= FUELING_INTERVAL_MILES - 100:  # 100 mile buffer
-        # Determine where to fuel
-        fuel_miles = 100  # Fuel after driving 100 more miles
-        fuel_position = current_position + fuel_miles
-        
-        # Estimate fuel location
-        fuel_location, _ = get_location_at_position(start_location, end_location, fuel_miles / distance)
-        
-        # Add fuel stop
-        fuel_time = current_time + datetime.timedelta(hours=(fuel_miles / AVERAGE_SPEED_MPH))
-        fuel_stop = RouteStop(
-            trip=trip,
-            location=fuel_location,
-            arrival_time=fuel_time,
-            departure_time=fuel_time + datetime.timedelta(hours=0.75),  # 45 minutes for fueling
-            stop_type='fuel',
-            notes="Scheduled refueling"
-        )
-        fuel_stop.save()
-        stops.append(fuel_stop)
-        
-        # Update time and hours
-        driving_time = fuel_miles / AVERAGE_SPEED_MPH
-        current_time = fuel_time + datetime.timedelta(hours=0.75)
-        driving_hours_today += driving_time
-        on_duty_hours_today += driving_time + 0.75
-        cycle_hours_used += driving_time + 0.75
-        current_position = fuel_position
-        last_fuel_position = fuel_position
-        
-        # Recalculate remaining distance and duration
-        remaining_distance = distance - fuel_miles
-        remaining_duration = duration - driving_time
-        
-        # Process the rest of the segment
-        return process_driving_segment(
-            trip, stops, fuel_location, end_location,
-            current_time, remaining_distance, remaining_duration,
-            driving_hours_today, on_duty_hours_today, cycle_hours_used,
-            current_position, last_fuel_position
-        )
-    
-    # If we can't complete the segment today, add overnight stop
-    if duration > remaining_driving_hours:
-        # Calculate how far we can go today
-        drive_hours_today = remaining_driving_hours
-        miles_today = (drive_hours_today / duration) * distance
-        overnight_position = current_position + miles_today
-        
-        # Estimate overnight location
-        overnight_location, _ = get_location_at_position(start_location, end_location, miles_today / distance)
-        
-        # Add overnight stop
-        overnight_arrival = current_time + datetime.timedelta(hours=drive_hours_today)
-        overnight_stop = RouteStop(
-            trip=trip,
-            location=overnight_location,
-            arrival_time=overnight_arrival,
-            departure_time=overnight_arrival + datetime.timedelta(hours=REQUIRED_REST_HOURS),
-            stop_type='sleep',
-            notes="Required 10-hour rest period"
-        )
-        overnight_stop.save()
-        stops.append(overnight_stop)
-        
-        # Update time and hours
-        current_time = overnight_arrival + datetime.timedelta(hours=REQUIRED_REST_HOURS)
-        driving_hours_today = 0  # Reset for new day
-        on_duty_hours_today = 0  # Reset for new day
-        cycle_hours_used += drive_hours_today
-        current_position = overnight_position
-        
-        # Process the rest of the segment tomorrow
-        remaining_distance = distance - miles_today
-        remaining_duration = duration - drive_hours_today
-        
-        return process_driving_segment(
-            trip, stops, overnight_location, end_location,
-            current_time, remaining_distance, remaining_duration,
-            driving_hours_today, on_duty_hours_today, cycle_hours_used,
-            current_position, last_fuel_position
-        )
-    
-    # We can complete the segment today
-    current_time += datetime.timedelta(hours=duration)
-    driving_hours_today += duration
-    on_duty_hours_today += duration
-    cycle_hours_used += duration
-    current_position += distance
-    
-    return current_time, driving_hours_today, on_duty_hours_today, cycle_hours_used, current_position, last_fuel_position
+    # Return updated state
+    return {
+        'current_time': current_time,
+        'driving_hours_today': driving_hours_today,
+        'on_duty_hours_today': on_duty_hours_today,
+        'cycle_hours_used': cycle_hours_used,
+        'current_position': current_position,
+        'last_fuel_position': last_fuel_position
+    }
 
-def get_location_at_position(start_location, end_location, ratio):
+def get_location_at_position(start_location, end_location, ratio, coordinates):
     """
-    Estimate a location that's a certain ratio along the route from start to end
+    Get an exact location that's a certain ratio along the route using the actual route coordinates
     
-    This is a simple linear interpolation - in a real app, you'd use the actual route
-    geometry from the routing API to find the exact location.
+    Args:
+        start_location: Starting location object
+        end_location: Ending location object
+        ratio: Position ratio along the route (0.0 to 1.0)
+        coordinates: List of [lon, lat] coordinates from the routing API
+    
+    Returns:
+        Location object at the specified position
     """
-    # Simple linear interpolation between start and end coordinates
-    lat = start_location.latitude + (end_location.latitude - start_location.latitude) * ratio
-    lon = start_location.longitude + (end_location.longitude - start_location.longitude) * ratio
+    # Check if we're at the start or end
+    if ratio <= 0:
+        return start_location
+    if ratio >= 1:
+        return end_location
+    
+    # Get the actual coordinates at the specified ratio along the route
+    total_points = len(coordinates)
+    point_index = int(ratio * (total_points - 1))
+    
+    # Get the coordinates
+    lon, lat = coordinates[point_index]
     
     # Create or find a location object
     location_name = f"Stop at {ratio:.0%} between {start_location.name} and {end_location.name}"
@@ -364,4 +418,4 @@ def get_location_at_position(start_location, end_location, ratio):
         defaults={'name': location_name}
     )
     
-    return location, created
+    return location
