@@ -4,4 +4,3 @@ migrations/
 db.sqlite3
 .vscode
 media/
-trip_planner/logs/fonts/
