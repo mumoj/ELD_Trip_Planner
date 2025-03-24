@@ -21,6 +21,7 @@ from django.conf.urls.static import static
 from rest_framework.routers import DefaultRouter
 from routes.views import LocationViewSet, TripViewSet, RouteStopViewSet
 from logs.views import DailyLogViewSet, LogEntryViewSet
+from django.views.decorators.csrf import csrf_exempt
 
 # Create a router and register viewsets
 router = DefaultRouter()
