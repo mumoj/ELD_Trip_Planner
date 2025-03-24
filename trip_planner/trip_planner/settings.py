@@ -24,9 +24,9 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-#kl8*58!pwz8%w#sj5qke
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = int(os.environ.get('DEBUG', 0))
+DEBUG = int(os.environ.get('DEBUG', 1))
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1 localhost').split(' ')
+ALLOWED_HOSTS = ['*']
 
 
 # Application definition
@@ -38,7 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'debug_toolbar',
+    'whitenoise.runserver_nostatic',
     'rest_framework',
     'routes',
     'logs',
@@ -46,9 +46,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
-    # 'django.middleware.csrf.CsrfViewMiddleware', development
+    'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
@@ -83,11 +84,12 @@ WSGI_APPLICATION = 'trip_planner.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': os.environ.get('SQL_ENGINE', 'django.db.backends.sqlite3'),
-        'NAME': os.environ.get('SQL_DATABASE', BASE_DIR / 'db.sqlite3'),
-        'USER': os.environ.get('SQL_USER', 'user'),
-        'PASSWORD': os.environ.get('SQL_PASSWORD', 'password'),
-        'HOST': os.environ.get('SQL_HOST', 'localhost'),
-        'PORT': os.environ.get('SQL_PORT', '5432'),
+        'NAME': '/home/fro/TripPlanner/trip_planner/db.sqlite3',
+        # 'NAME': os.environ.get('SQL_DATABASE', BASE_DIR/'data'/ 'db.sqlite3'),
+        'USER': os.environ.get('SQL_USER', ''),
+        'PASSWORD': os.environ.get('SQL_PASSWORD', ''),
+        'HOST': os.environ.get('SQL_HOST', ''),
+        'PORT': os.environ.get('SQL_PORT', ''),
     }
 }
 
@@ -125,9 +127,11 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 # Static files (CSS, JavaScript, Images)
+# Static files configuration
 STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
 
 # Media settings for storing log images
 MEDIA_URL = 'media/'
@@ -146,16 +150,12 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.1/howto/static-files/
-
-STATIC_URL = 'static/'
-
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Debug toolbar settings
-if DEBUG:
-    INTERNAL_IPS = ['127.0.0.1']
+
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'  # Or another backend
+SESSION_COOKIE_AGE = 1209600  # Two weeks in seconds
+SESSION_COOKIE_SECURE = True 

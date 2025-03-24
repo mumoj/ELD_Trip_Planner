@@ -1,45 +1,22 @@
 services:
-  db:
-    image: postgres:13
-    volumes:
-      - postgres_data:/var/lib/postgresql/data/
-    env_file:
-      - ./.env
-    environment:
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_USER=postgres
-      - POSTGRES_DB=trip_planner
-
   web:
     build: ./trip_planner
     restart: always
-    depends_on:
-      - db
-    env_file:
-      - ./.env
     volumes:
       - ./trip_planner:/app
-      - static_volume:/app/staticfiles
-      - media_volume:/app/media
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn trip_planner.wsgi:application --bind 0.0.0.0:8000"
+      - ./trip_planner/data:/app/data
+      - ./media:/app/media  # Use a local directory for media files
+      - ./.env:/app/.env
     ports:
       - "8000:8000"
-
-  nginx:
-    image: nginx:1.21
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
-      - static_volume:/home/app/staticfiles
-      - media_volume:/home/app/media
-    depends_on:
-      - web
-
-volumes:
-  postgres_data:
-  static_volume:
-  media_volume:
+      - "3000:3000"
+    environment:
+      - DEBUG=1
+      - SECRET_KEY=XX2hByOdctNWDJ0WNA_fuVNC9kBT26MTBtsU_xvQbsCrVic9cdEj9sfhiK2xQr3nPlo
+      - DJANGO_ALLOWED_HOSTS=*
+      - SQL_ENGINE=django.db.backends.sqlite3
+      - SQL_DATABASE=/app/data/db.sqlite3
+    command: >
+      sh -c "pip install debugpy && 
+        cd /app &&
+        python -m debugpy --listen 0.0.0.0:3001 --wait-for-client manage.py runserver 0.0.0.0:8000 --noreload"
