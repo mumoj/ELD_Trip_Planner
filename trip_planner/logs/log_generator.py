@@ -272,11 +272,15 @@ def generate_log_image(daily_log):
     
     return daily_log.log_image.name
 
-def generate_daily_logs_for_trip(trip):
+def generate_daily_logs_for_trip(trip, skip_image_generation=False):
     """
     Generate daily logs for entire trip based on route stops
     This function creates a DailyLog entry for each day of the trip
     and populates it with LogEntry objects based on the schedule
+    
+    Parameters:
+    trip - The Trip model instance
+    skip_image_generation - If True, skips generating log images (for client-side rendering)
     """
     stops = trip.stops.all().order_by('arrival_time')
     
@@ -288,41 +292,47 @@ def generate_daily_logs_for_trip(trip):
     end_date = stops.last().departure_time.date()
     daily_logs = []
     
-    # Check if the first stop is the initial "Trip start" rest stop
     first_stop = stops.first()
-    if first_stop.stop_type == 'rest' and "Trip start" in (first_stop.notes or ""):
-        # This is the initial preparation stop
-        current_status = 'off_duty'  # Log as off-duty during preparation
-        status_start_time = first_stop.arrival_time
+    current_status = 'driving'
+    status_start_time = first_stop.arrival_time
+    
+   
+    # Track the pending status to carry over at midnight
+    pending_midnight_status = None
+    pending_midnight_location = None
+    pending_midnight_remarks = None
+    pending_midnight_status_end = None
+    
+    # Check if the first stop is the initial "Trip start" rest stop
+    
+    # if first_stop.stop_type == 'rest' and "Trip start" in (first_stop.notes or ""):
+    #     # This is the initial preparation stop
+    #     current_status = 'off_duty'  # Log as off-duty during preparation
+    #     status_start_time = first_stop.arrival_time
         
-        # Get or create the daily log for this date
-        daily_log, created = DailyLog.objects.get_or_create(
-            trip=trip,
-            date=current_date,
-            defaults={'json_data': {}}
-        )
+    #     # Get or create the daily log for this date
+    #     daily_log, created = DailyLog.objects.get_or_create(
+    #         trip=trip,
+    #         date=current_date,
+    #         defaults={'json_data': {}}
+    #     )
         
-        # Clear existing entries if we're regenerating
-        if not created:
-            daily_log.entries.all().delete()
+    #     # Clear existing entries if we're regenerating
+    #     if not created:
+    #         daily_log.entries.all().delete()
         
-        # Create log entry for the preparation time
-        LogEntry.objects.create(
-            daily_log=daily_log,
-            start_time=first_stop.arrival_time,
-            end_time=first_stop.departure_time,
-            status='off_duty',
-            location=first_stop.location.name,
-            remarks="Pre-trip inspection and preparation"
-        )
+    #     # Create log entry for the preparation time
+    #     LogEntry.objects.create(
+    #         daily_log=daily_log,
+    #         start_time=first_stop.arrival_time,
+    #         end_time=first_stop.departure_time,
+    #         status='off_duty',
+    #         location=first_stop.location.name,
+    #         remarks="Pre-trip inspection and preparation"
+    #     )
         
         # Set up for the driving segment that follows
-        current_status = 'driving'
-        status_start_time = first_stop.departure_time
-    else:
-        # No initial preparation stop found, start with driving
-        current_status = 'driving'
-        status_start_time = first_stop.arrival_time
+        
     
     # Process each day
     while current_date <= end_date:
@@ -333,11 +343,47 @@ def generate_daily_logs_for_trip(trip):
             defaults={'json_data': {}}
         )
         
-        # Clear existing entries if we're regenerating and we haven't just created entries
-        if not created and current_status != 'driving':
+        # Clear existing entries if we're regenerating
+        if not created:
             daily_log.entries.all().delete()
         
+        # Check if there's a status carried over from the previous day
+        if pending_midnight_status:
+            # Create an entry from midnight to either the first stop of the day or when the status changes
+            midnight_start = datetime.datetime.combine(
+                current_date,
+                datetime.time(0, 0, 0)
+            ).replace(tzinfo=status_start_time.tzinfo)
+            
+            # Find the first stop of the day (if any)
+            days_stops = stops.filter(arrival_time__date=current_date).order_by('arrival_time')
+            
+            if days_stops.exists():
+                # The continued status ends at the first stop of the day
+                first_stop_of_day = days_stops.first()
+                
+                if midnight_start < first_stop_of_day.arrival_time:
+                    LogEntry.objects.create(
+                        daily_log=daily_log,
+                        start_time=midnight_start,
+                        end_time=first_stop_of_day.arrival_time,
+                        status=pending_midnight_status,
+                        location=pending_midnight_location,
+                        remarks=pending_midnight_remarks + " (continued from previous day)"
+                    )
+                    
+                    # Update tracking variables to process remaining stops
+                    status_start_time = pending_midnight_status_end
+                    current_status = 'driving'
+                    
+            
+            # Reset pending status as it's been handled
+            pending_midnight_status = None
+            pending_midnight_location = None
+            pending_midnight_remarks = None
+        
         # Process stops for this day
+        last_entry = None
         for stop in stops.filter(arrival_time__date=current_date):
             # Create log entry for driving/on-duty to this stop if coming from previous status
             if stop.arrival_time > status_start_time and current_status == 'driving':
@@ -362,7 +408,7 @@ def generate_daily_logs_for_trip(trip):
                 new_status = 'on_duty'
             
             # Create log entry for time at the stop
-            LogEntry.objects.create(
+            last_entry = LogEntry.objects.create(
                 daily_log=daily_log,
                 start_time=stop.arrival_time,
                 end_time=stop.departure_time,
@@ -374,6 +420,7 @@ def generate_daily_logs_for_trip(trip):
             # Update tracking variables
             status_start_time = stop.departure_time
             current_status = 'driving'  # Assume driving after each stop unless it's the end of day
+            current_remarks = f"Driving after {stop.get_stop_type_display()}"
         
         # Create log entry for time from last stop of the day until midnight
         day_end = datetime.datetime.combine(
@@ -381,37 +428,26 @@ def generate_daily_logs_for_trip(trip):
             datetime.time(23, 59, 59)
         ).replace(tzinfo=status_start_time.tzinfo)
         
-        if status_start_time.date() == current_date and status_start_time < day_end:
-            # Check if this is the last stop of the entire trip
-            is_last_stop = current_date == end_date and status_start_time >= stops.last().departure_time
+        if status_start_time.date() > current_date:
+            # Limit entry to midnight.
+            last_entry.end_time = day_end
+            last_entry.save()
             
-            # If last stop of trip, driver stays at location (off_duty)
-            # Otherwise, continue driving to next destination
-            end_of_day_status = 'off_duty' if is_last_stop else current_status
-            
-            LogEntry.objects.create(
-                daily_log=daily_log,
-                start_time=status_start_time,
-                end_time=day_end,
-                status=end_of_day_status,
-                location=stops.filter(departure_time__date=current_date).last().location.name,
-                remarks="End of day" if not is_last_stop else "Trip completed"
-            )
+            # If not the last day and we're still active, set pending status for next day
+            if current_date < end_date:
+                pending_midnight_status = last_entry.status
+                pending_midnight_location = last_entry.location
+                pending_midnight_remarks = last_entry.remarks
+                pending_midnight_status_end = status_start_time
         
-        # Generate the visual log
-        generate_log_image(daily_log)
+        # Generate the visual log if not skipping image generation
+        if not skip_image_generation:
+            generate_log_image(daily_log)
         
         daily_logs.append(daily_log)
         
         # Move to the next day
         current_date += datetime.timedelta(days=1)
-        
-        # If we have stops on the next day, set the start time to midnight
-        if current_date <= end_date:
-            status_start_time = datetime.datetime.combine(
-                current_date,
-                datetime.time(0, 0, 0)
-            ).replace(tzinfo=status_start_time.tzinfo)
     
     return daily_logs
 
