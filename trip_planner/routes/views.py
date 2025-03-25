@@ -36,7 +36,7 @@ class TripViewSet(viewsets.ModelViewSet):
         
         # Generate stops based on HOS regulations
         stops = generate_stops(trip, route_data)
-        daily_logs = generate_daily_logs_for_trip(trip)
+        daily_logs = generate_daily_logs_for_trip(trip, skip_image_generation=True)
         
         
         # Return route data and stops
