@@ -26,6 +26,7 @@ class Trip(models.Model):
     dropoff_location = models.ForeignKey(Location, on_delete=models.CASCADE, related_name='trips_as_dropoff')
     current_cycle_hours = models.FloatField(help_text="Current cycle hours used (in hours)")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='planned')
+    client_timezone = models.CharField(max_length=50, default='UTC', help_text="Client's timezone")
     
     def __str__(self):
         return f"Trip from {self.pickup_location} to {self.dropoff_location}"

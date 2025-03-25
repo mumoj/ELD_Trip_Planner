@@ -30,3 +30,5 @@ class LogEntry(models.Model):
     
     def __str__(self):
         return f"{self.get_status_display()} from {self.start_time} to {self.end_time}"
+    
+    

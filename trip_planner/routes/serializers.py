@@ -26,5 +26,5 @@ class TripSerializer(serializers.ModelSerializer):
                   'pickup_location', 'pickup_location_details',
                   'dropoff_location', 'dropoff_location_details',
                   'current_cycle_hours', 'created_at', 'updated_at',
-                  'status', 'stops']
+                  'status', 'stops', 'client_timezone']
         read_only_fields = ['created_at', 'updated_at']
