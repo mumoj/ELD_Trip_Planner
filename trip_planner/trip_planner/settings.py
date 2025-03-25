@@ -11,6 +11,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 """
 import os
 from pathlib import Path
+import dj_database_url
+
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -82,14 +84,7 @@ WSGI_APPLICATION = 'trip_planner.wsgi.application'
 
 # Database
 DATABASES = {
-    'default': {
-        'ENGINE': os.environ.get('SQL_ENGINE', 'django.db.backends.sqlite3'),
-        'NAME': os.environ.get('SQL_DATABASE', BASE_DIR / 'db.sqlite3'),
-        'USER': os.environ.get('SQL_USER', ''),
-        'PASSWORD': os.environ.get('SQL_PASSWORD', ''),
-        'HOST': os.environ.get('SQL_HOST', ''),
-        'PORT': os.environ.get('SQL_PORT', ''),
-    }
+    'default': dj_database_url.config(default=os.getenv('DATABASE_URL'))
 }
 
 
