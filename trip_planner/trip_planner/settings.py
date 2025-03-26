@@ -22,7 +22,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-#kl8*58!pwz8%w#sj5qke*6=cgm-ihnm4%4rx&o)*_mfok!2rx')
+SECRET_KEY = os.environ.get('SECRET_KEY', 'XX2hByOdctNWDJ0WNA_fuVNC9kBT26MTBtsU_xvQbsCrVic9cdEj9sfhiK2xQr3nPlo')
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
@@ -85,7 +85,7 @@ WSGI_APPLICATION = 'trip_planner.wsgi.application'
 
 # Database
 DATABASES = {
-    'default': dj_database_url.config(default=os.getenv('DATABASE_URL'))
+    'default': dj_database_url.config(default=os.getenv('DATABASE_URL', 'postgresql://neondb_owner:npg_0TUYk5wLOMAC@ep-shrill-term-a82kk0f2-pooler.eastus2.azure.neon.tech/neondb?sslmode=require' ))
 }
 
 
