@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'whitenoise.runserver_nostatic',
+    'corsheaders',
     'rest_framework',
     'routes',
     'logs',
@@ -152,4 +153,16 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'  # Or another backend
 SESSION_COOKIE_AGE = 1209600  # Two weeks in seconds
-SESSION_COOKIE_SECURE = True 
+SESSION_COOKIE_SECURE = True
+
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+else:
+    # In production
+    CORS_ALLOWED_ORIGINS = [
+        "https://frontend-git-main-mumojs-projects.vercel.app",
+        # Add any other domains that need access
+    ]
+
+# Allow credentials (cookies, authorization headers)
+CORS_ALLOW_CREDENTIALS = True

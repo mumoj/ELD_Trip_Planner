@@ -9,4 +9,5 @@ whitenoise>=5.2.0,<6.0.0
 debugpy==1.5.1
 dj-database-url
 psycopg2-binary
+django-cors-headers
 
