@@ -84,9 +84,18 @@ WSGI_APPLICATION = 'trip_planner.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
-# Database
 DATABASES = {
-    'default': dj_database_url.config(default='postgresql://neondb_owner:npg_0TUYk5wLOMAC@ep-shrill-term-a82kk0f2-pooler.eastus2.azure.neon.tech/neondb?sslmode=require' )
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'neondb',
+        'USER': 'neondb_owner',
+        'PASSWORD': 'npg_0TUYk5wLOMAC',
+        'HOST': 'ep-shrill-term-a82kk0f2-pooler.eastus2.azure.neon.tech',
+        'PORT': '5432',
+        'OPTIONS': {
+            'sslmode': 'require',
+        }
+    }
 }
 
 
