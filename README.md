@@ -182,8 +182,3 @@ docker run -p 8000:8000 -e DATABASE_URL=postgresql://user:password@host/trip_pla
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📬 Contact
-
-Jackson Mumo - [mumo@example.com](mailto:mumo@example.com)
-
-Project Link: [https://github.com/mumojs/trip-planner-backend](https://github.com/mumojs/trip-planner-backend)
